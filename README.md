@@ -33,7 +33,7 @@ Get help:
 
     $ aiodnsbrute --help
 
-    Usage: cli.py [OPTIONS] DOMAIN
+    Usage: cli.py [OPTIONS] DOMAINS
 
       aiodnsbrute is a command line tool for brute forcing domain names
       utilizing Python's asyncio module.
@@ -59,7 +59,13 @@ Get help:
       --version                     Show the version and exit.
       --help                        Show this message and exit.
 
+If multiple domains are set, the flags apply to all of them.
+
 ### Examples
+
+Run a brute force with default options on multiple domains:
+
+    $ aiodnsbrute domain1.com domain2.com
 
 Run a brute force with some custom options:
 

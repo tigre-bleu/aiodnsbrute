@@ -135,9 +135,9 @@ class aioDNSBrute(object):
             task.add_done_callback(functools.partial(self._dns_result_callback, host))
             self.tasks.append(task)
         await asyncio.gather(*self.tasks, return_exceptions=True)
-
+        
     def run(
-        self, wordlist, domain, resolvers=None, wildcard=True, verify=True, query=True
+        self, wordlist, domains, resolvers=None, wildcard=True, verify=True, query=True
     ):
         """
         Sets up the bruteforce job, does domain verification, sets resolvers, checks for wildcard
@@ -146,7 +146,7 @@ class aioDNSBrute(object):
 
         Args:
             wordlist: a string containing a path to a filename to be used as a wordlist
-            domain: the base domain name to be used for lookups
+            domains: the list of base domain names to be used for lookups
             resolvers: a list of DNS resolvers to be used (default None, uses system resolvers)
             wildcard: bool, do wildcard dns detection (default true)
             verify: bool, check if domain exists (default true)
@@ -155,73 +155,75 @@ class aioDNSBrute(object):
         Returns:
             dict containing result of lookups
         """
-        self.logger.info(
-            f"Brute forcing {domain} with a maximum of {self.max_tasks} concurrent tasks..."
-        )
-        if verify:
-            self.logger.info(f"Using local resolver to verify {domain} exists.")
-            try:
-                socket.gethostbyname(domain)
-            except socket.gaierror as err:
-                self.logger.error(
-                    f"Couldn't resolve {domain}, use the --no-verify switch to ignore this error."
-                )
-                raise SystemExit(
-                    self.logger.error(f"Error from host lookup: {err}")
-                )
-        else:
-            self.logger.warn("Skipping domain verification. YOLO!")
-        if resolvers:
-            self.resolver.nameservers = resolvers
-        self.logger.info(
-            f"Using recursive DNS with the following servers: {self.resolver.nameservers}"
-        )
-
-        if wildcard:
-            # 63 chars is the max allowed segment length, there is practically no chance that it will be a legit record
-            random_sld = (
-                lambda: f'{"".join(random.choice(string.ascii_lowercase + string.digits) for i in range(63))}'
+        for domain in domains:
+            self.logger.info(
+                f"Brute forcing {domain} with a maximum of {self.max_tasks} concurrent tasks..."
             )
-            try:
-                self.lookup_type = "query"
-                wc_check = self.loop.run_until_complete(
-                    self._dns_lookup(f"{random_sld()}.{domain}")
-                )
-            except aiodns.error.DNSError as err:
-                # we expect that the record will not exist and error 4 will be thrown
-                self.logger.info(
-                    f"No wildcard response was detected for this domain."
-                )
-                wc_check = None
-            finally:
-                if wc_check is not None:
-                    self.ignore_hosts = [host.host for host in wc_check]
-                    self.logger.warn(
-                        f"Wildcard response detected, ignoring answers containing {self.ignore_hosts}"
+            if verify:
+                self.logger.info(f"Using local resolver to verify {domain} exists.")
+                try:
+                    socket.gethostbyname(domain)
+                except socket.gaierror as err:
+                    self.logger.error(
+                        f"Couldn't resolve {domain}, use the --no-verify switch to ignore this error."
                     )
-        else:
-            self.logger.warn("Wildcard detection is disabled")
+                    raise SystemExit(
+                        self.logger.error(f"Error from host lookup: {err}")
+                    )
+            else:
+                self.logger.warn("Skipping domain verification. YOLO!")
+            if resolvers:
+                self.resolver.nameservers = resolvers
+            self.logger.info(
+                f"Using recursive DNS with the following servers: {self.resolver.nameservers}"
+            )
 
-        if query:
-            self.logger.info(
-                "Using pycares `query` function to perform lookups, CNAMEs cannot be identified"
-            )
-            self.lookup_type = "query"
-        else:
-            self.logger.info(
-                "Using pycares `gethostbyname` function to perform lookups, CNAME data will be appended to results (** denotes CNAME, show actual name with -vv)"
-            )
-            self.lookup_type = "gethostbyname"
+            if wildcard:
+                # 63 chars is the max allowed segment length, there is practically no chance that it will be a legit record
+                random_sld = (
+                    lambda: f'{"".join(random.choice(string.ascii_lowercase + string.digits) for i in range(63))}'
+                )
+                try:
+                    self.lookup_type = "query"
+                    wc_check = self.loop.run_until_complete(
+                        self._dns_lookup(f"{random_sld()}.{domain}")
+                    )
+                except aiodns.error.DNSError as err:
+                    # we expect that the record will not exist and error 4 will be thrown
+                    self.logger.info(
+                        f"No wildcard response was detected for this domain."
+                    )
+                    wc_check = None
+                finally:
+                    if wc_check is not None:
+                        self.ignore_hosts = [host.host for host in wc_check]
+                        self.logger.warn(
+                            f"Wildcard response detected, ignoring answers containing {self.ignore_hosts}"
+                        )
+            else:
+                self.logger.warn("Wildcard detection is disabled")
+
+            if query:
+                self.logger.info(
+                    "Using pycares `query` function to perform lookups, CNAMEs cannot be identified"
+                )
+                self.lookup_type = "query"
+            else:
+                self.logger.info(
+                    "Using pycares `gethostbyname` function to perform lookups, CNAME data will be appended to results (** denotes CNAME, show actual name with -vv)"
+                )
+                self.lookup_type = "gethostbyname"
 
         with open(wordlist, encoding="utf-8", errors="ignore") as words:
             w = words.read().splitlines()
-        self.logger.info(f"Wordlist loaded, proceeding with {len(w)} DNS requests")
+        self.logger.info(f"Wordlist loaded, proceeding with {len(w)} DNS requests for {len(domains)} domain(s)")
         try:
             if self.verbosity >= 1:
                 self.pbar = tqdm(
-                    total=len(w), unit="rec", maxinterval=0.1, mininterval=0
+                    total=len(w) * len(domains), unit="rec", maxinterval=0.1, mininterval=0
                 )
-            self.loop.run_until_complete(self._queue_lookups(w, domain))
+            for domain in domains:
+                self.loop.run_until_complete(self._queue_lookups(w, domain))
         except KeyboardInterrupt:
             self.logger.warn("Caught keyboard interrupt, cleaning up...")
             asyncio.gather(*asyncio.Task.all_tasks()).cancel()
@@ -286,7 +288,7 @@ class aioDNSBrute(object):
     help="Verify domain name is sane before beginning, enabled by default",
 )
 @click.version_option("0.3.2")
-@click.argument("domain", required=True)
+@click.argument("domains", required=True, nargs=-1)
 def main(**kwargs):
     """aiodnsbrute is a command line tool for brute forcing domain names utilizing Python's asyncio module.
 
@@ -302,7 +304,7 @@ def main(**kwargs):
             verbosity = 0
         if outfile is None:
             # wasn't specified on command line
-            outfile = open(f'{kwargs["domain"]}.{output}', "w")
+            outfile = open(f'{"_".join(kwargs["domains"])}.{output}', "w")
     if resolvers:
         lines = resolvers.read().splitlines()
         resolvers = [x.strip() for x in lines if (x and not x.startswith("#"))]
@@ -310,7 +312,7 @@ def main(**kwargs):
     bf = aioDNSBrute(verbosity=verbosity, max_tasks=kwargs.get("max_tasks"))
     results = bf.run(
         wordlist=kwargs.get("wordlist"),
-        domain=kwargs.get("domain"),
+        domains=kwargs.get("domains"),
         resolvers=resolvers,
         wildcard=kwargs.get("wildcard"),
         verify=kwargs.get("verify"),
